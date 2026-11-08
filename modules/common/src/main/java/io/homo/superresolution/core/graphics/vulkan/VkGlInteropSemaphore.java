@@ -40,6 +40,8 @@ public class VkGlInteropSemaphore {
     }
 
     public static VkGlInteropSemaphore create(VulkanDevice vulkanDevice) {
+        // Validate before creating/exporting a Vulkan semaphore handle.
+        io.homo.superresolution.core.graphics.GraphicsDevice.requireOpenGLExternalSemaphoreInterop();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             long[] pVkSemaphore = new long[]{0};
             int pGlSemaphore = 0;

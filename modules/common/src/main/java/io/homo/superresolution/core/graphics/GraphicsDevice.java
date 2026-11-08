@@ -22,11 +22,12 @@ import org.lwjgl.opengl.EXTMemoryObject;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GLCapabilities;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.vulkan.*;
-
+import io.homo.superresolution.api.platform.OperatingSystemType;
 import io.homo.superresolution.common.SuperResolution;
+import org.lwjgl.vulkan.*;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
@@ -63,8 +64,73 @@ public class GraphicsDevice {
         this.deviceName = deviceName;
     }
 
+    /**
+     * Returns the OpenGL external-memory extensions required by the current
+     * platform's Vulkan external-handle implementation. This is checked only
+     * when an interop memory import is attempted, not during Vulkan device
+     * discovery: Vulkan may still be useful without GL external-memory support.
+     */
+    public static List<String> getMissingOpenGLExternalMemoryExtensions() {
+        GLCapabilities caps = GL.getCapabilities();
+        List<String> missing = new ArrayList<>();
+        if (!caps.GL_EXT_memory_object) {
+            missing.add("GL_EXT_memory_object");
+        }
+        if (OperatingSystemType.get() == OperatingSystemType.WINDOWS) {
+            if (!caps.GL_EXT_memory_object_win32) {
+                missing.add("GL_EXT_memory_object_win32");
+            }
+        } else if (!caps.GL_EXT_memory_object_fd) {
+            missing.add("GL_EXT_memory_object_fd");
+        }
+        return Collections.unmodifiableList(missing);
+    }
+
+    /**
+     * Returns the OpenGL external-semaphore extensions required by the current
+     * platform's Vulkan external-handle implementation.
+     */
+    public static List<String> getMissingOpenGLExternalSemaphoreExtensions() {
+        GLCapabilities caps = GL.getCapabilities();
+        List<String> missing = new ArrayList<>();
+        if (!caps.GL_EXT_semaphore) {
+            missing.add("GL_EXT_semaphore");
+        }
+        if (OperatingSystemType.get() == OperatingSystemType.WINDOWS) {
+            if (!caps.GL_EXT_semaphore_win32) {
+                missing.add("GL_EXT_semaphore_win32");
+            }
+        } else if (!caps.GL_EXT_semaphore_fd) {
+            missing.add("GL_EXT_semaphore_fd");
+        }
+        return Collections.unmodifiableList(missing);
+    }
+
+    public static void requireOpenGLExternalMemoryInterop() {
+        List<String> missing = getMissingOpenGLExternalMemoryExtensions();
+        if (!missing.isEmpty()) {
+            throw new UnsupportedOperationException(
+                    "OpenGL/Vulkan external-memory import is unavailable; missing extensions: "
+                            + String.join(", ", missing)
+            );
+        }
+    }
+
+    public static void requireOpenGLExternalSemaphoreInterop() {
+        List<String> missing = getMissingOpenGLExternalSemaphoreExtensions();
+        if (!missing.isEmpty()) {
+            throw new UnsupportedOperationException(
+                    "OpenGL/Vulkan external-semaphore import is unavailable; missing extensions: "
+                            + String.join(", ", missing)
+            );
+        }
+    }
+
     public static GraphicsDevice createFromOpenGL() {
-        if (GL.getCapabilities().GL_EXT_memory_object) {
+        GLCapabilities glCapabilities = GL.getCapabilities();
+        // Device UUID discovery needs the base memory-object extension only.
+        // Do not require FD/semaphore interop just to initialize the Vulkan RHI.
+        if (glCapabilities.GL_EXT_memory_object) {
             List<byte[]> deviceUUIDs = new ArrayList<>();
             byte[] driverUUID = new byte[UUID_SIZE];
             try (MemoryStack stack = MemoryStack.stackPush()) {

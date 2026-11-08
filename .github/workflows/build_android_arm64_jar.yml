@@ -1,0 +1,286 @@
+name: Build Super Resolution Android ARM64 JAR
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/build_android_arm64_jar.yml'
+      - 'configs/1.21.11.json'
+      - 'scripts/android-arm64-preflight.sh'
+      - 'modules/common/**'
+      - 'modules/native/**'
+      - 'modules/fabric/**'
+      - 'common/**'
+      - 'native/**'
+      - 'fabric/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build-android-arm64-jar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect source layout
+        id: layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d modules/native/cpp && -d modules/common && -d modules/fabric ]]; then
+            prefix='modules/'
+          elif [[ -d native/cpp && -d common && -d fabric ]]; then
+            prefix=''
+          else
+            echo 'Unsupported repository layout: expected common/fabric/native at root or under modules/.' >&2
+            exit 1
+          fi
+          if [[ -n "$prefix" ]]; then project_root='modules'; else project_root='.'; fi
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          echo "root=$project_root" >> "$GITHUB_OUTPUT"
+          echo "SR_PROJECT_ROOT=$project_root" >> "$GITHUB_ENV"
+          printf 'Using project prefix: %s\n' "${prefix:-<repository root>}"
+
+      - name: Initialize Android core submodules
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PREFIX='${{ steps.layout.outputs.prefix }}'
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth 1 -- \
+            "${PREFIX}native/cpp/SRNativeMain/third_party/freetype" \
+            "${PREFIX}native/cpp/SRNativeMain/third_party/glslang"
+
+      - name: Verify Android Vulkan external-FD wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMMON="$SR_PROJECT_ROOT/common"
+          FILE="$COMMON/src/main/java/io/homo/superresolution/core/RenderSystems.java"
+          grep -Fq 'osType == OperatingSystemType.LINUX || osType == OperatingSystemType.ANDROID' "$FILE"
+          grep -Fq 'VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME' "$FILE"
+          grep -Fq 'VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME' "$FILE"
+          VULKAN="$COMMON/src/main/java/io/homo/superresolution/core/graphics/vulkan"
+          grep -Fq 'case LINUX ->' "$VULKAN/VulkanInterop.java"
+          grep -Fq 'case ANDROID ->' "$VULKAN/VulkanInterop.java"
+          grep -Fq 'android.os.ParcelFileDescriptor' "$VULKAN/VulkanInterop.java"
+          grep -Fq 'closeAndroidFileDescriptor' "$VULKAN/VulkanInterop.java"
+          GL_DEVICE="$COMMON/src/main/java/io/homo/superresolution/core/graphics/GraphicsDevice.java"
+          ! grep -Fq 'validateOpenGLExternalInterop(glCapabilities)' "$GL_DEVICE"
+          grep -Fq 'GL_EXT_memory_object_fd' "$GL_DEVICE"
+          grep -Fq 'GL_EXT_semaphore_fd' "$GL_DEVICE"
+          grep -Fq 'getMissingOpenGLExternalMemoryExtensions' "$GL_DEVICE"
+          grep -Fq 'getMissingOpenGLExternalSemaphoreExtensions' "$GL_DEVICE"
+          PROBE="$VULKAN/AndroidExternalInteropProbe.java"
+          test -s "$PROBE"
+          grep -Fq 'vkGetPhysicalDeviceImageFormatProperties2' "$PROBE"
+          grep -Fq 'vkGetPhysicalDeviceExternalSemaphoreProperties' "$PROBE"
+          grep -Fq 'VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT_KHR' "$PROBE"
+          grep -Fq 'VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT_KHR' "$PROBE"
+          grep -Fq 'AndroidExternalInteropProbe.inspect' "$VULKAN/VkRenderSystem.java"
+          grep -Fq 'requireOpenGLExternalMemoryInterop' "$COMMON/src/main/java/io/homo/superresolution/core/graphics/opengl/texture/GlImportableTexture2D.java"
+          grep -Fq 'requireOpenGLExternalSemaphoreInterop' "$VULKAN/VkGlInteropSemaphore.java"
+          echo 'Android OPAQUE_FD wiring and import-boundary guards are present.'
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK command-line tools
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+
+      - name: Install Android NDK r28 beta 1 (28.0.12433566)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sdkmanager --channel=3 --install "ndk;28.0.12433566"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          test -n "$SDK_ROOT"
+          test -f "$SDK_ROOT/ndk/28.0.12433566/source.properties"
+          grep -Fq 'Pkg.Revision = 28.0.12433566' \
+            "$SDK_ROOT/ndk/28.0.12433566/source.properties"
+
+      - name: Export and verify Android NDK path
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          test -n "$SDK_ROOT"
+          NDK="$SDK_ROOT/ndk/28.0.12433566"
+          test -f "$NDK/build/cmake/android.toolchain.cmake"
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK"
+
+      - name: Install CMake and Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build unzip
+
+      - name: Run Android ARM64 build preflight
+        run: bash scripts/android-arm64-preflight.sh
+
+      - name: Verify checked-out native submodules
+        shell: bash
+        run: |
+          set -euxo pipefail
+          NATIVE="$SR_PROJECT_ROOT/native/cpp/SRNativeMain/third_party"
+          test -f "$NATIVE/glslang/CMakeLists.txt"
+          test -f "$NATIVE/freetype/CMakeLists.txt"
+          PREFIX='${{ steps.layout.outputs.prefix }}'
+          git submodule status -- \
+            "${PREFIX}native/cpp/SRNativeMain/third_party/freetype" \
+            "${PREFIX}native/cpp/SRNativeMain/third_party/glslang"
+
+      - name: Verify expected Android CMake output name and provider switches
+        shell: bash
+        run: |
+          set -euxo pipefail
+          CMAKE_FILE="$SR_PROJECT_ROOT/native/cpp/SRNativeMain/CMakeLists.txt"
+          TOP_CMAKE="$SR_PROJECT_ROOT/native/cpp/CMakeLists.txt"
+          grep -Fq 'OUTPUT_NAME "SuperResolution+${LIB_PLATFORM}+${SR_BUILD_TYPE}"' "$CMAKE_FILE"
+          grep -Fq 'option(SR_FSR ' "$TOP_CMAKE"
+          grep -Fq 'option(SR_XESS ' "$TOP_CMAKE"
+          grep -Fq 'option(SR_NGX ' "$TOP_CMAKE"
+          grep -Fq 'option(SR_STREAMLINE ' "$TOP_CMAKE"
+          grep -Fq 'libSuperResolution+android+release.so' .github/workflows/build_android_arm64_jar.yml
+
+      - name: Configure Android ARM64 native core
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S "$SR_PROJECT_ROOT/native/cpp" -B build/android-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSR_FSR=OFF \
+            -DSR_FSR4=OFF \
+            -DSR_D3D12=OFF \
+            -DSR_XESS=OFF \
+            -DSR_NGX=OFF \
+            -DSR_STREAMLINE=OFF
+
+      - name: Build Android ARM64 JNI core
+        run: cmake --build build/android-arm64 --target SR_MAIN_LIB --parallel 2
+
+      - name: Verify Android ELF and JNI exports
+        id: verify-native
+        shell: bash
+        run: |
+          set -euxo pipefail
+          LIB="$SR_PROJECT_ROOT/native/cpp/output/lib/libSuperResolution+android+release.so"
+          READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          NM="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          test -s "$LIB"
+          "$READELF" -h "$LIB" | grep -q 'Class:.*ELF64'
+          "$READELF" -h "$LIB" | grep -q 'Machine:.*AArch64'
+          for symbol in \
+            Java_io_homo_superresolution_core_SuperResolutionNative_getVersionInfo \
+            Java_io_homo_superresolution_core_SuperResolutionNative_initGlslang \
+            Java_io_homo_superresolution_core_SuperResolutionNative_compileShaderToSpirv; do
+            "$NM" -D --defined-only "$LIB" | grep -q "$symbol"
+          done
+          sha256sum "$LIB" | tee "$LIB.sha256"
+          echo "native_lib=$LIB" >> "$GITHUB_OUTPUT"
+          echo "native_sha=$LIB.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Embed Android library into common mod resources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          COMMON="$SR_PROJECT_ROOT/common"
+          LIB="$SR_PROJECT_ROOT/native/cpp/output/lib/libSuperResolution+android+release.so"
+          mkdir -p "$COMMON/src/main/resources/lib"
+          cp "$LIB" "$COMMON/src/main/resources/lib/libSuperResolution+android+release.so"
+
+      - name: Build Fabric 1.21.11 mod JAR
+        run: >-
+          ./gradlew --no-daemon :fabric:remapJar
+          -Pminecraft_version_config=1.21.11
+          -Pis_dev=false
+          -Puse_debug_lib=false
+
+      - name: Verify the remapped JAR embeds the Android library
+        id: verify-jar
+        shell: bash
+        run: |
+          set -euxo pipefail
+          FABRIC="$SR_PROJECT_ROOT/fabric"
+          RESOURCE='lib/libSuperResolution+android+release.so'
+          NATIVE="$SR_PROJECT_ROOT/native/cpp/output/lib/libSuperResolution+android+release.so"
+          FOUND=''
+          while IFS= read -r candidate; do
+            if unzip -Z1 "$candidate" | grep -Fxq "$RESOURCE"; then
+              FOUND="$candidate"
+              break
+            fi
+          done < <(find "$FABRIC/build/libs" -maxdepth 1 -type f -name '*.jar' \
+            ! -name '*sources*' ! -name '*javadoc*' ! -name '*dev-shadow*' | sort)
+
+          if [[ -z "$FOUND" ]]; then
+            echo 'No Fabric remapped JAR contains the Android native resource.' >&2
+            find "$FABRIC/build/libs" -maxdepth 1 -type f -name '*.jar' -print || true
+            exit 1
+          fi
+
+          unzip -p "$FOUND" "$RESOURCE" > /tmp/embedded-native.so
+          cmp "$NATIVE" /tmp/embedded-native.so
+          echo "jar_path=$FOUND" >> "$GITHUB_OUTPUT"
+          echo "Verified: $FOUND"
+
+      - name: Upload installable Fabric JAR candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-resolution-fabric-1.21.11-android-arm64
+          path: ${{ steps.verify-jar.outputs.jar_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native library for diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-resolution-android-arm64-native
+          path: ${{ steps.verify-native.outputs.native_lib }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native library checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-resolution-android-arm64-native-sha256
+          path: ${{ steps.verify-native.outputs.native_sha }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-resolution-android-arm64-build-diagnostics
+          path: |
+            build/android-arm64/**
+            native/cpp/output/**
+            modules/native/cpp/output/**
+            common/build/reports/**
+            modules/common/build/reports/**
+            fabric/build/reports/**
+            modules/fabric/build/reports/**
+            **/CMakeFiles/CMakeError.log
+            **/CMakeFiles/CMakeOutput.log
+          if-no-files-found: ignore
+          retention-days: 7

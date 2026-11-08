@@ -149,6 +149,11 @@ public class VkRenderSystem implements IRenderSystem {
         }
         VkPhysicalDevice physicalDevice = selectPhysicalDevice();
         capabilities.init(instance, physicalDevice);
+        if (io.homo.superresolution.api.platform.OperatingSystemType.get()
+                == io.homo.superresolution.api.platform.OperatingSystemType.ANDROID) {
+            // Read-only capability query: no external resources are created or imported here.
+            AndroidExternalInteropProbe.inspect(physicalDevice, capabilities.getDeviceExtensions());
+        }
         VulkanPresentationFeature.validateDevice(this, physicalDevice);
         this.vulkanDevice = createLogicalDeviceWithCapabilities(physicalDevice);
         VulkanPresentationFeature.completeInitialization(this);

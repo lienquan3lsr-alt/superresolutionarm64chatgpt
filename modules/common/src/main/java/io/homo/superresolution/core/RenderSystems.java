@@ -212,7 +212,11 @@ public class RenderSystems {
             vulkan.addDeviceExtension(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME)
                     .addDeviceExtension(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
         }
-        if (Platform.currentPlatform.getOS().type == OperatingSystemType.LINUX) {
+        OperatingSystemType osType = Platform.currentPlatform.getOS().type;
+        if (osType == OperatingSystemType.LINUX || osType == OperatingSystemType.ANDROID) {
+            // Android's OPAQUE_FD interop implementation uses the same POSIX-FD
+            // Vulkan extensions as Linux. Request them explicitly so VkRenderSystem
+            // enables them when the selected physical device supports them.
             vulkan.addDeviceExtension(KHRExternalMemoryFd.VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME)
                     .addDeviceExtension(KHRExternalSemaphoreFd.VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
         }

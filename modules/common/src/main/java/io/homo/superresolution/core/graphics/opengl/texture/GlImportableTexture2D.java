@@ -42,6 +42,8 @@ public class GlImportableTexture2D extends GlTexture2D {
 
     @Override
     protected void initializeTexture() {
+        // Check before exporting/taking ownership of a Vulkan memory FD.
+        io.homo.superresolution.core.graphics.GraphicsDevice.requireOpenGLExternalMemoryInterop();
         try (
                 GlState ignored = new GlState(
                         GlState.STATE_TEXTURE | GlState.STATE_ACTIVE_TEXTURE | GlState.STATE_TEXTURES);

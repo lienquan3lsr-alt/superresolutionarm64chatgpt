@@ -20,7 +20,6 @@ package io.homo.superresolution.core.graphics.vulkan;
 
 import com.sun.jna.Pointer;
 import io.homo.superresolution.api.platform.OperatingSystemType;
-import io.homo.superresolution.api.platform.Platform;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.opengl.EXTMemoryObjectFD;
 import org.lwjgl.opengl.EXTMemoryObjectWin32;
@@ -38,13 +37,18 @@ import static org.lwjgl.vulkan.VK11.*;
 
 public class VulkanInterop {
     public static final VulkanInteropExt IMPL;
-    private static final Method LINUX_CLOSE = findLinuxClose();
 
     static {
-        if (Platform.currentPlatform.getOS().type == OperatingSystemType.WINDOWS) {
+        OperatingSystemType os = OperatingSystemType.get();
+        if (os == OperatingSystemType.WINDOWS) {
             IMPL = new WindowsVulkanInteropExtImpl();
-        } else {
+        } else if (os == OperatingSystemType.LINUX || os == OperatingSystemType.ANDROID) {
+            // Android's Vulkan OPAQUE_FD and OpenGL *_fd imports use POSIX file descriptors.
             IMPL = new LinuxVulkanInteropExtImpl();
+        } else {
+            throw new UnsupportedOperationException(
+                    "External Vulkan/OpenGL interop is not implemented for " + os
+            );
         }
     }
 
@@ -55,9 +59,15 @@ public class VulkanInterop {
         switch (OperatingSystemType.get()) {
             case WINDOWS -> closeWin32Handle(handle);
             case LINUX -> {
+                // Linux OPAQUE_FD is a POSIX file descriptor. Close it only when GL did not take ownership.
                 if (handle >= 0L && closeLinuxFileDescriptor(Math.toIntExact(handle)) != 0) {
                     throw new IllegalStateException("Failed to close exported Linux file descriptor");
                 }
+            }
+            case ANDROID -> {
+                // Use the Android framework wrapper instead of LWJGL's Linux UNISTD binding.
+                // This avoids resolving an unavailable Linux native symbol during Android cleanup.
+                if (handle >= 0L) closeAndroidFileDescriptor(Math.toIntExact(handle));
             }
             default -> throw new UnsupportedOperationException("Unsupported external-handle platform");
         }
@@ -85,19 +95,33 @@ public class VulkanInterop {
             try {
                 return UNISTD.class.getMethod("close", int.class);
             } catch (NoSuchMethodException exception) {
-                throw new IllegalStateException("LWJGL does not expose a Linux close function", exception);
+                throw new IllegalStateException("LWJGL does not expose a POSIX close function", exception);
             }
         }
     }
 
     private static int closeLinuxFileDescriptor(int fileDescriptor) {
         try {
-            Object result = LINUX_CLOSE.getParameterCount() == 2
-                    ? LINUX_CLOSE.invoke(null, 0L, fileDescriptor)
-                    : LINUX_CLOSE.invoke(null, fileDescriptor);
+            Method closeMethod = findLinuxClose();
+            Object result = closeMethod.getParameterCount() == 2
+                    ? closeMethod.invoke(null, 0L, fileDescriptor)
+                    : closeMethod.invoke(null, fileDescriptor);
             return (int) result;
         } catch (ReflectiveOperationException exception) {
             throw new IllegalStateException("Failed to close exported Linux file descriptor", exception);
+        }
+    }
+
+    private static void closeAndroidFileDescriptor(int fileDescriptor) {
+        Object parcelFileDescriptor = null;
+        try {
+            Class<?> pfdClass = Class.forName("android.os.ParcelFileDescriptor");
+            parcelFileDescriptor = pfdClass.getMethod("adoptFd", int.class).invoke(null, fileDescriptor);
+            pfdClass.getMethod("close").invoke(parcelFileDescriptor);
+        } catch (ReflectiveOperationException exception) {
+            Throwable cause = exception instanceof java.lang.reflect.InvocationTargetException invocation
+                    && invocation.getCause() != null ? invocation.getCause() : exception;
+            throw new IllegalStateException("Failed to close exported Android POSIX file descriptor", cause);
         }
     }
 

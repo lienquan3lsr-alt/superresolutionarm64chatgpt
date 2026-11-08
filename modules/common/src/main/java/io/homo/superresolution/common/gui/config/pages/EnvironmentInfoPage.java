@@ -19,7 +19,9 @@
 package io.homo.superresolution.common.gui.config.pages;
 
 import io.homo.superresolution.common.gui.impl.Text;
+import io.homo.superresolution.api.platform.OperatingSystemType;
 import io.homo.superresolution.core.graphics.GraphicsCapabilities;
+import io.homo.superresolution.core.RenderSystems;
 import io.homo.superresolution.core.gui.core.ContainerWidget;
 import io.homo.superresolution.core.gui.core.frame.Frame;
 import io.homo.superresolution.core.gui.core.frame.ScrollableFrame;
@@ -80,6 +82,73 @@ public final class EnvironmentInfoPage implements ConfigPage {
                 GraphicsCapabilities.getVulkanVersionString(),
                 GraphicsCapabilities.getVulkanDeviceExtensions()
         ));
+
+        // Android-only, read-only preflight. An extension list is not proof that
+        // the driver can successfully export/import a resource at runtime.
+        if (OperatingSystemType.get() == OperatingSystemType.ANDROID) {
+            TitlePill labelInterop = context.createSectionPill("Android OpenGL–Vulkan interop (experimental)");
+            labelInterop.layout().setMargin(YogaEdge.TOP, 8);
+            labelInterop.layout().setMargin(YogaEdge.BOTTOM, 6);
+            container.addChild(labelInterop);
+
+            java.util.Set<String> glExtensions = GraphicsCapabilities.getGLExtensions();
+            boolean vulkanRhiAvailable = RenderSystems.isSupportVulkan();
+            java.util.Set<String> vkExtensions = vulkanRhiAvailable
+                    ? GraphicsCapabilities.getVulkanDeviceExtensions()
+                    : java.util.Set.of();
+            java.util.List<String> requiredGl = java.util.List.of(
+                    "GL_EXT_memory_object",
+                    "GL_EXT_memory_object_fd",
+                    "GL_EXT_semaphore",
+                    "GL_EXT_semaphore_fd"
+            );
+            java.util.List<String> requiredVk = java.util.List.of(
+                    "VK_KHR_external_memory_fd",
+                    "VK_KHR_external_semaphore_fd"
+            );
+            java.util.List<String> missingGl = requiredGl.stream().filter(e -> !glExtensions.contains(e)).toList();
+            java.util.List<String> missingVk = requiredVk.stream().filter(e -> !vkExtensions.contains(e)).toList();
+
+            InfoCard interopCard = new InfoCard();
+            interopCard.addChild(context.createInfoLine(
+                    "OpenGL external memory/semaphore",
+                    missingGl.isEmpty() ? "All listed extensions exposed" : "Missing: " + String.join(", ", missingGl)
+            ));
+            interopCard.addChild(context.createInfoLine(
+                    "Vulkan RHI",
+                    vulkanRhiAvailable
+                            ? "Initialized; extensions below are from the selected physical device"
+                            : "Unavailable; Vulkan FD support is unknown (not confirmed missing)"
+            ));
+            interopCard.addChild(context.createInfoLine(
+                    "Vulkan external FD",
+                    !vulkanRhiAvailable
+                            ? "Not queried: no Super Resolution Vulkan device"
+                            : (missingVk.isEmpty() ? "All listed extensions exposed" : "Missing: " + String.join(", ", missingVk))
+            ));
+            interopCard.addChild(context.createInfoLine(
+                    "OPAQUE_FD image capability",
+                    vulkanRhiAvailable
+                            ? io.homo.superresolution.core.graphics.vulkan.AndroidExternalInteropProbe.imageStatus()
+                            : "Not queried: Vulkan RHI unavailable"
+            ));
+            interopCard.addChild(context.createInfoLine(
+                    "OPAQUE_FD semaphore capability",
+                    vulkanRhiAvailable
+                            ? io.homo.superresolution.core.graphics.vulkan.AndroidExternalInteropProbe.semaphoreStatus()
+                            : "Not queried: Vulkan RHI unavailable"
+            ));
+            String status;
+            if (!vulkanRhiAvailable) {
+                status = "Incomplete: Vulkan RHI did not initialize; check latest.log for loader/device/UUID errors";
+            } else if (!missingGl.isEmpty() || !missingVk.isEmpty()) {
+                status = "Not ready: one or more required external-memory/semaphore extensions are missing";
+            } else {
+                status = "Candidate path only: extensions exposed; image import and semaphore round-trip are NOT verified";
+            }
+            interopCard.addChild(context.createInfoLine("Preflight result", status));
+            container.addChild(interopCard);
+        }
 
         context.finalizeFrame(frame, container);
         return frame;

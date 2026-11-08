@@ -12,7 +12,7 @@
 #include <windows.h>
 #include <string>
 #include <iostream>
-#elif defined(ON_LINUX64)
+#elif defined(ON_LINUX64) || defined(ON_ANDROID)
 #include <dlfcn.h>
 #include <string>
 #include <iostream>
@@ -22,7 +22,7 @@
 
 #ifdef ON_WIN64
 using SRProviderLibraryHandle = HMODULE;
-#elif defined(ON_LINUX64)
+#elif defined(ON_LINUX64) || defined(ON_ANDROID)
 using SRProviderLibraryHandle = void *;
 #endif
 
@@ -55,7 +55,7 @@ static bool srCloseProviderLibrary(SRProviderLibraryHandle handle) {
     }
     #ifdef ON_WIN64
     return FreeLibrary(handle) != 0;
-    #elif defined(ON_LINUX64)
+    #elif defined(ON_LINUX64) || defined(ON_ANDROID)
     return dlclose(handle) == 0;
     #endif
 }
@@ -657,7 +657,7 @@ SR_API SRReturnCode srLoadUpscaleProvidersFromLibrary(
         return SR_RETURN_CODE_CANNOT_FIND_LIBRARY;
     }
 
-    #elif defined(ON_LINUX64)
+    #elif defined(ON_LINUX64) || defined(ON_ANDROID)
     // 路径不用转换，本来就是UTF-8
     // 这个converter用来转换messageCallback
     // FSR为什么要用wchar_t呢
@@ -686,7 +686,7 @@ SR_API SRReturnCode srLoadUpscaleProvidersFromLibrary(
             GetProcAddress(libraryHandle, getProvidersCountFuncName.c_str());
     auto getProviders = (SRUpscaleProviderSupplierFunc)
             GetProcAddress(libraryHandle, getProvidersFuncName.c_str());
-    #elif defined(ON_LINUX64)
+    #elif defined(ON_LINUX64) || defined(ON_ANDROID)
     auto getProvidersCount = (SRUpscaleProviderSupplierCountFunc)
             dlsym(libraryHandle, getProvidersCountFuncName.c_str());
     auto getProviders = (SRUpscaleProviderSupplierFunc)

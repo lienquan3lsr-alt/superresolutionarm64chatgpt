@@ -28,13 +28,48 @@ endif()
 if(MSVC)
     add_compile_options(/utf-8 /ZI)
 endif()
-# Ensure static deps are built with PIC when linking into shared libraries on Linux.
-if(CMAKE_SYSTEM_NAME MATCHES "Linux")
+# The native target is a shared library on every supported platform.
+# Android requires every static dependency linked into that .so to be PIC too.
+if(CMAKE_SYSTEM_NAME MATCHES "Linux" OR CMAKE_SYSTEM_NAME MATCHES "Android")
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
+
+# Keep third-party dependencies static when producing the single JNI .so.
+if(CMAKE_SYSTEM_NAME MATCHES "Android")
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static dependencies" FORCE)
+endif()
+
 #add freetype
 add_subdirectory("${FT_DIR}")
 
+# Android ARM64: build glslang from the checked-out source submodule.
+# Linux/Windows continue using the project's prebuilt glslang archives.
+if(CMAKE_SYSTEM_NAME MATCHES "Android")
+    if(NOT EXISTS "${GLSLANG_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Android ARM64 build requires the glslang git submodule. "
+            "Run: git submodule update --init --recursive")
+    endif()
+
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static dependencies" FORCE)
+    set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    set(ENABLE_SPIRV ON CACHE BOOL "" FORCE)
+    set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
+    set(ENABLE_SPVREMAPPER OFF CACHE BOOL "" FORCE)
+    set(ENABLE_GLSLANG_JS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
+    set(ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${GLSLANG_DIR}" "${CMAKE_BINARY_DIR}/glslang" EXCLUDE_FROM_ALL)
+
+    add_library(sr_glslang_prebuilt INTERFACE)
+    target_link_libraries(sr_glslang_prebuilt INTERFACE
+        glslang
+        glslang-default-resource-limits
+        SPIRV
+    )
+    message(STATUS "glslang: building from source for Android ${ANDROID_ABI}")
+else()
 # Link the glslang archives downloaded by init.py instead of rebuilding glslang.
 set(GLSLANG_PREBUILT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../prebuilt/glslang")
 set(GLSLANG_COMMIT_HASH_FILE "${GLSLANG_PREBUILT_ROOT}/commit-hash.txt")
@@ -158,6 +193,9 @@ target_link_libraries(sr_glslang_prebuilt INTERFACE
 )
 message(STATUS "glslang 预编译库: ${GLSLANG_PREBUILT_DIR}")
 
+
+endif()
+
 #add source files
 aux_source_directory(${PROJECT_SOURCE_DIR}/src ALL_SRC)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/nvg NVG_SRC)
@@ -168,12 +206,24 @@ if(WIN32)
 else()
     set_target_properties(SR_MAIN_LIB PROPERTIES OUTPUT_NAME "SuperResolution+${LIB_PLATFORM}+${SR_BUILD_TYPE}")
 endif()
-target_link_libraries(SR_MAIN_LIB
+find_package(Threads REQUIRED)
+
+target_link_libraries(SR_MAIN_LIB PRIVATE
     sr_glslang_prebuilt
     freetype
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
 )
-if(NOT WIN32)
-elseif(CMAKE_SYSTEM_NAME MATCHES "Linux")
-    target_link_libraries(SR_MAIN_LIB -lstdc++fs -pthread -ldl -static-libgcc)
+
+# std::filesystem is provided by the toolchain on Android and modern Linux.
+# Keep the legacy libstdc++fs / static-libgcc additions Linux-only.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(SR_MAIN_LIB PRIVATE stdc++fs)
+    target_link_options(SR_MAIN_LIB PRIVATE -static-libgcc)
+endif()
+
+# Fail at link time rather than shipping an Android .so with unresolved symbols.
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    target_link_options(SR_MAIN_LIB PRIVATE "-Wl,--no-undefined")
 endif()
 
