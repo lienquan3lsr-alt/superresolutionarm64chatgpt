@@ -34,7 +34,7 @@
                 },
                 {
                     "name": "sodium",
-                    "version": "0.8.15-beta+mc1.21.11"
+                    "version": "0.8.15-beta.1+mc1.21.11"
                 },
                 {
                     "name": "spark",
@@ -65,7 +65,7 @@
                 },
                 {
                     "name": "sodium",
-                    "version": "0.8.15-beta+mc1.21.11"
+                    "version": "0.8.15-beta.1+mc1.21.11"
                 },
                 {
                     "name": "iris",
