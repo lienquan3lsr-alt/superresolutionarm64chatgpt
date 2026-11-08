@@ -196,10 +196,20 @@ message(STATUS "glslang 预编译库: ${GLSLANG_PREBUILT_DIR}")
 
 endif()
 
-#add source files
+# Add source files
 aux_source_directory(${PROJECT_SOURCE_DIR}/src ALL_SRC)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/nvg NVG_SRC)
+
+# The AVX2 serializer is not used by Minecraft 1.21.11.
+# Exclude it from Android ARM64 because it uses x86-only intrinsics.
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    list(FILTER ALL_SRC EXCLUDE REGEX "fast_vertex_serializer[.]cpp$")
+endif()
+
 add_library(SR_MAIN_LIB SHARED ${ALL_SRC} ${NVG_SRC})
+
+
+
 target_compile_definitions(SR_MAIN_LIB PRIVATE SRLIB_VERSION="${SRLIB_VERSION}")
 if(WIN32)
     set_target_properties(SR_MAIN_LIB PROPERTIES OUTPUT_NAME "libSuperResolution+${LIB_PLATFORM}+${SR_BUILD_TYPE}")
