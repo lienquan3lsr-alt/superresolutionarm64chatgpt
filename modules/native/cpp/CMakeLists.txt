@@ -79,10 +79,15 @@ elseif(NOT WIN32)
     add_compile_options(-Wall -O3)
 endif()
 
-include_directories(
-    ${PROJECT_SOURCE_DIR}/third_party
-    ${PROJECT_SOURCE_DIR}/third_party/jni
-)
+# Prevent bundled JNI headers from shadowing the Android NDK's jni.h.
+include_directories(${PROJECT_SOURCE_DIR}/third_party)
+
+if(NOT ON_ANDROID)
+    include_directories(${PROJECT_SOURCE_DIR}/third_party/jni)
+endif()
+    
+    
+
 
 add_subdirectory("SRNativeMain")
 if(SR_D3D12 AND ON_WINDOWS)
