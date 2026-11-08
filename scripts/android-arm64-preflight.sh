@@ -35,7 +35,7 @@ PY
 [[ -n "$ANDROID_NDK_HOME" ]] || fail 'ANDROID_NDK_HOME/ANDROID_NDK_ROOT is not set.'
 [[ -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" ]] || fail "Android NDK toolchain missing under: $ANDROID_NDK_HOME"
 NDK_REVISION="$(sed -n 's/^Pkg.Revision = //p' "$ANDROID_NDK_HOME/source.properties" 2>/dev/null | head -n1)"
-[[ "$NDK_REVISION" == "28.0.12433566" ]] || fail "Expected Android NDK 28.0.12433566, found '${NDK_REVISION:-unknown}'."
+[[ "$NDK_REVISION" == "28.0.12433566" || "$NDK_REVISION" == "28.0.12433566-beta1" ]] || fail "Expected Android NDK 28.0.12433566 or beta1, found '${NDK_REVISION:-unknown}'."
 LLVM_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 for tool in clang++ llvm-readelf llvm-nm; do
     [[ -x "$LLVM_BIN/$tool" ]] || fail "NDK tool missing: $LLVM_BIN/$tool"
